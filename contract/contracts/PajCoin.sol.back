@@ -1,0 +1,306 @@
+pragma solidity ^0.4.0;
+
+import "zeppelin-solidity/contracts/ownership/Ownable.sol";
+import "zeppelin-solidity/contracts/token/ERC20/StandardToken.sol";
+
+contract PajCoin is StandardToken, Ownable{
+
+    string public constant name = "PajCoin";
+
+    string public constant symbol = "PJC";
+
+    uint32 public constant decimals = 18;
+
+    uint256 public constant INITIAL_SUPPLY = 150000000e18;
+
+    // event DataEvent(string comment);
+    // event DataEvent(uint value, string comment);
+    // event DataEvent(address addr, string comment);
+
+    bool public needsUpdate = false;
+
+    /**
+     * @dev An exchange rate that is multiplied in 10^9 for accuracy.
+     * Rate = tokens * 10^9 / eth
+     */
+    uint64 public exchange_rate;
+
+    uint updaterGasPrice;
+
+    function setUpdaterGasPrice(uint _updaterGasPrice) public onlyUpdater() {
+        updaterGasPrice = _updaterGasPrice;
+    }
+
+    // Комиссия за предыдущий вызов функции обновления курса. Эта сумма будет
+    // распределена к уплате между дольщиками при следующем вызове функции
+    // updateRate. Фиксированное значение 38507 - стоимость первой установки курса.
+    // Измеряется gas'ом.
+    uint lastUpdateCost = 38507;
+
+    /**
+     * @dev An account that commands to change a rate
+     */
+    address updater;
+
+    modifier onlyUpdater() {
+        require(msg.sender == updater);
+        _;
+    }
+
+    function setUpdater(address _updater) public onlyOwner() {
+        updater = _updater;
+    }
+
+    // структ с юзером и суммой, которую он переслал
+    struct Deal {
+        address user;
+        uint money;
+    }
+    // очередь "забронированных" переводов на покупку токенов
+    mapping(uint => Deal) ethSended;
+
+    // Счетчик людей, "забронировавших" токены.
+    // "Бронирование" значит, что человек прислал деньги на покупку, но курс еще
+    // не установлен. Соответственно, перевод средств добавляется в очередь и при
+    // следующем обновлении курса будет обработан
+    uint ethSendedNumber = 0;
+
+    mapping(uint => Deal) tokenSended;
+
+    uint tokenSendedNumber = 0;
+
+    modifier allDealsArePaid() {
+        require(ethSendedNumber == 0);
+        require(tokenSendedNumber == 0);
+        _;
+    }
+
+    function PajCoin() public payable {
+        totalSupply_ = INITIAL_SUPPLY;
+        balances[msg.sender] = INITIAL_SUPPLY;
+        Transfer(0x0, msg.sender, INITIAL_SUPPLY);
+        updater = msg.sender;
+        updaterGasPrice = tx.gasprice;
+    }
+
+
+    // функция обновления курса и пересылки токенов всем, кто их забранировал
+    function updateRate(uint64 rate) public onlyUpdater() {
+        // DataEvent(uint(rate), "Start to update rate: value");
+        require(rate > 0);
+        uint startGas = msg.gas;
+        uint fee;
+        if (ethSendedNumber == 0) {
+            fee = 0;
+        } else {
+            fee = lastUpdateCost * updaterGasPrice / ethSendedNumber;
+        }
+        // DataEvent(fee, "Fee:");
+        exchange_rate = rate;
+        for (uint32 i = 0; i < ethSendedNumber; i++) {
+            address user = ethSended[i].user;
+            uint money = ethSended[i].money.sub(fee);
+            // DataEvent(money, "Someone sent ether: amount");
+            uint value = money * exchange_rate / 1e9;
+            // DataEvent(value, "Ether to tokens: amount");
+            if (balances[owner] < value) {
+                // DataEvent(balances[owner], "Not enough tokens: owner balance");
+                // Вернуть деньги, если токенов не осталось
+                user.transfer(money);
+            } else {
+                balances[owner] = balances[owner].sub(value);
+                balances[user] = balances[user].add(value);
+                // DataEvent(value, "Tokens were sent to customer: amount");
+            }
+        }
+        ethSendedNumber = 0;
+
+        for (uint32 j = 0; j < tokenSendedNumber; j++) {
+            user = tokenSended[j].user;
+            uint token = tokenSended[j].money;
+
+            // DataEvent(token, "Someone sent tokens: amount");
+
+            value = token * 1e9 / exchange_rate;
+
+            // DataEvent(value, "Tokens to ether: amount");
+
+            if (this.balance < value) {
+                // Вернуть токены, если денег не осталось
+                // DataEvent(this.balance, "Not enough ether: contract balance");
+
+                balances[owner] = balances[owner].sub(token);
+                balances[user] = balances[user].add(token);
+            } else {
+                user.transfer(value);
+                // DataEvent(value, "Ether was sent to customer: amount");
+            }
+        }
+        tokenSendedNumber = 0;
+
+        needsUpdate = false;
+        // пересчитываем комиссию. Добавочное значение за вызов метода и другие
+        // накладные расходы найдено эмпирически
+        lastUpdateCost = 12683 + startGas - msg.gas;
+    }
+
+    // Для P2P
+    mapping(address => mapping(address => uint)) ethDeals;
+    mapping(address => mapping(address => uint)) tokenDeals;
+
+    // При переводе денег добавляет пользователя в список на перечисление
+    // средств. Средства будут перечислены после первого же обновления курса
+    // внешним скриптом.
+    function() public payable {
+        // DataEvent(msg.value, "Someone sent ether: amount");
+        bytes memory addr = bytes(msg.data);
+        // DataEvent(addr.length, "Message data length");
+        // P2P
+        if (addr.length > 4) {
+
+            uint eth = msg.value;
+            address from = msg.sender;
+            address to = bytesToAddress(slice(addr, 4, addr.length - 4));
+
+            // DataEvent(from, "Address: from");
+            // DataEvent(to, "Address: to");
+
+            // есть ли сделка на мое имя. В токенах
+            uint tokens = tokenDeals[from][to];
+            // то есть мне аккаунт 'to' ничего не присылал
+            if (tokens == 0) {
+                // DataEvent("No opened token deal. Open eth deal: none");
+                ethDeals[to][from] = ethDeals[to][from].add(eth);
+            } else {
+                // DataEvent(tokens, "There is an opened token deal:amount");
+                uint tokensInEther = tokens * 1e9 / exchange_rate;
+
+                // DataEvent(tokensInEther, "Amount of ether from tokens");
+                // я пересылаю деньги, получаю сдачу + токены
+                // сдача
+                uint reminder = eth.sub(tokensInEther);
+                // DataEvent(reminder, "Ether reminder");
+                tokenDeals[from][to] = 0;
+                to.transfer(tokensInEther);
+                from.transfer(reminder);
+                transfer(from, tokens);
+                // DataEvent("Completed: none");
+
+            }
+        } else {
+            // DataEvent("Add a deal to queue. Wait for rate update: none");
+            ethSended[ethSendedNumber++] = Deal({user: msg.sender, money: msg.value});
+            needsUpdate = true;
+        }
+    }
+
+
+    function getMoney(uint value) public onlyOwner() allDealsArePaid() {
+        require(value > 0);
+        require(value <= this.balance);
+        owner.transfer(value);
+    }
+
+    // Переопределение метода перевода денег. При переводе на контракт переводит
+    // токены владельцу, а отправителю эфир по текущему курсу
+    function transfer(address _to, uint256 _value) public returns (bool) {
+        require(_to != address(0));
+        require(_value <= balances[msg.sender]);
+        // DataEvent(_value, "Someone sent tokens: amount");
+
+        if (_to == address(this)) {
+            // DataEvent("Tokens were sent to a contract: none");
+            bytes memory data = bytes(msg.data);
+            // DataEvent(data.length, "Message data length");
+            //P2P
+            if (data.length > 68) {
+                uint tokens = _value;
+
+                address from = msg.sender;
+                address to = bytesToAddress(slice(data, 68, data.length - 68));
+
+                // DataEvent(from, "Address: from");
+                // DataEvent(to, "Address: to");
+
+                // есть ли сделка на мое имя? В эфире
+                uint eth = ethDeals[from][to];
+                // то есть мне аккаунт 'to' ничего не присылал
+                if (eth == 0) {
+                    // DataEvent("No opened eth deal. Open token deal: none");
+                    tokenDeals[to][from] = tokenDeals[to][from].add(tokens);
+                } else {
+                    // DataEvent(eth, "There is an opened eth deal:amount");
+                    //то что лежит на сделке в токенах
+                    uint etherInTokens = eth * exchange_rate / 1e9;
+
+                    // DataEvent(etherInTokens, "Amount of tokens from ether");
+                    // я пересылаю токены, получаю сдачу + эфир
+                    uint reminder = tokens.sub(etherInTokens);
+                    // DataEvent(etherInTokens, "Token reminder");
+                    ethDeals[from][to] = 0;
+                    transfer(to, etherInTokens);
+                    transfer(from, reminder);
+                    from.transfer(eth);
+                    // DataEvent("Completed: none");
+                }
+            } else {
+                balances[msg.sender] = balances[msg.sender].sub(_value);
+                balances[owner] = balances[owner].add(_value);
+                // DataEvent("Add a deal to queue. Wait for rate update: none");
+                tokenSended[tokenSendedNumber++] = Deal({user: msg.sender, money: _value});
+                needsUpdate = true;
+            }
+        } else {
+            // DataEvent("Common transfer: none");
+            balances[msg.sender] = balances[msg.sender].sub(_value);
+            balances[_to] = balances[_to].add(_value);
+            Transfer(msg.sender, _to, _value);
+        }
+        return true;
+    }
+
+
+
+    function bytesToAddress(bytes source) internal constant returns(address parsedReferer) {
+        assembly {
+            parsedReferer := mload(add(source,0x14))
+        }
+        return parsedReferer;
+    }
+
+    function slice(bytes _bytes, uint _start, uint _length) internal  pure returns (bytes) {
+        require(_bytes.length >= (_start + _length));
+
+        bytes memory tempBytes;
+
+        assembly {
+            switch iszero(_length)
+            case 0 {
+
+            tempBytes := mload(0x40)
+
+            let lengthmod := and(_length, 31)
+
+            let mc := add(add(tempBytes, lengthmod), mul(0x20, iszero(lengthmod)))
+            let end := add(mc, _length)
+
+        for {
+
+            let cc := add(add(add(_bytes, lengthmod), mul(0x20, iszero(lengthmod))), _start)
+        } lt(mc, end) {
+    mc := add(mc, 0x20)
+    cc := add(cc, 0x20)
+    } {
+    mstore(mc, mload(cc))
+    }
+        mstore(tempBytes, _length)
+        mstore(0x40, and(add(mc, 31), not(31)))
+        }
+        default {
+        tempBytes := mload(0x40)
+        mstore(0x40, add(tempBytes, 0x20))
+        }
+        }
+        return tempBytes;
+    }
+}
