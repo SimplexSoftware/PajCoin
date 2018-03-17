@@ -1,0 +1,16 @@
+{
+  "package_name": "PJC",
+  "version": "0.1",
+  "description": "PajCoin",
+  "authors": [
+    "Simplex Software"
+  ],
+  "keywords": [
+    "ethereum",
+    "pajcoin"
+  ],
+  "dependencies": {
+    "zeppelin": "^1.3.0"
+  },
+  "license": "MIT"
+}

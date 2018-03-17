@@ -1,0 +1,5 @@
+.idea
+installed_contracts
+node_modules
+compiled_contracts
+build
