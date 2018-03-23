@@ -91,11 +91,14 @@
     <build>
         <finalName>pajcoin</finalName>
 
-        <sourceDirectory>src/main/java</sourceDirectory>
         <resources>
             <resource>
                 <filtering>false</filtering>
                 <directory>src/main/resources</directory>
+            </resource>
+            <resource>
+                <filtering>true</filtering>
+                <directory>src/profiles/${profile.selected}</directory>
             </resource>
         </resources>
 
@@ -218,5 +221,23 @@
 
         </plugins>
     </build>
+    <profiles>
+        <profile>
+            <id>rinkeby</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+            <properties>
+                <profile.selected>rinkeby</profile.selected>
+            </properties>
+        </profile>
+        <profile>
+            <id>main</id>
+            <properties>
+                <profile.selected>main</profile.selected>
+            </properties>
+        </profile>
+    </profiles>
+
 
 </project>

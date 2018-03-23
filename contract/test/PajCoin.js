@@ -1,7 +1,7 @@
 var PajCoin = artifacts.require("../contracts/PajCoin.sol");
 
 contract('PajCoin', function(accounts) {
-    it("should put 150000000e18 MetaCoin in the creators account", function() {
+    it("should put 150000000e18 PajCoin in the creators account", function() {
         var coin = PajCoin.deployed();
         return coin.then(function(instance) {
             return instance.balanceOf.call(accounts[0]);

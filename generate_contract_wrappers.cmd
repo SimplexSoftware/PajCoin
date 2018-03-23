@@ -1,5 +1,5 @@
 chcp 65001
-set className=PajCoin
+set className=Exchanger
 cd contract/contracts
 del /S /Q "../compiled_contracts"
 solc zeppelin-solidity/=%~dp0/contract/node_modules/zeppelin-solidity/ %className%.sol --bin --abi --optimize -o ../compiled_contracts

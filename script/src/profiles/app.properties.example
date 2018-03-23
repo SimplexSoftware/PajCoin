@@ -1,0 +1,7 @@
+#this file must included in profile
+exchangerAddress =
+p2pexchangerAddress =
+updaterWalletPath =
+updaterWalletPassword =
+updaterPrivateKey =
+nodeUrl =
